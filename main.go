@@ -73,17 +73,20 @@ func handleEndpointBookmarksGET(w http.ResponseWriter, r *http.Request) {
 	ctx := appengine.NewContext(r)
 
 	q := datastore.NewQuery("Bookmark")
-
-	var bookmarks []BookmarkModel
-
-	if _, err := q.GetAll(ctx, &bookmarks); err != nil {
-		handleError(w, err, http.StatusInternalServerError)
-		return
-	}
-
+    t := q.Run(ctx)
+    
+	var currentBookmark BookmarkModel
+	dataIterator := newDatastoreIterator(t)
+	
 	var outputArray []BookmarkPresenter
-	for _, currentBookmark := range bookmarks {
-		outputArray = append(outputArray, presentBookmark(currentBookmark))
+	for dataIterator.NextBookmark( &currentBookmark ) {
+		log.Infof( ctx, "looping" )
+		outputArray = append( outputArray, presentBookmark( currentBookmark ) )
+	}
+	
+	if dataIterator.currentError != nil {
+		handleError(w, dataIterator.currentError, http.StatusInternalServerError)
+		return		
 	}
 
 	bookmarkBuffer, _ := toJSONBytesBuffer(outputArray)
@@ -214,6 +217,43 @@ func presentBookmark(inBookmark BookmarkModel) BookmarkPresenter {
 	return BookmarkPresenter{Name: inBookmark.Name, Url: inBookmark.Url, Tags: inBookmark.Tags}
 }
 
+type datastoreIterator struct {
+	allGone bool
+	cursor *datastore.Iterator
+	currentError error
+}
+
+func newDatastoreIterator( in *datastore.Iterator ) *datastoreIterator {
+	current := new(datastoreIterator)
+	current.cursor = in
+	current.allGone = false
+	
+	return current
+}
+
+
+func (it *datastoreIterator) handleError( err error ) {
+	if ( err == datastore.Done ) {
+		it.allGone = true
+		err = nil
+	}
+	
+	if ( err != nil ) {
+		it.currentError = err
+		it.allGone = true
+	}
+}
+
+
+// datastore package does interesting / fancy type work here to make sure we're putting
+// data into a good record value. Thus we can NOT just use interface{} here
+func (it *datastoreIterator) NextBookmark( bookmark *BookmarkModel ) (bool) {
+	//thing, _ := (it.currentRecord).Value( BookmarkModel )
+	_, err := it.cursor.Next(bookmark)
+	it.handleError( err )
+		
+	return it.allGone == false
+}
 
 
 // =======================================================================================
